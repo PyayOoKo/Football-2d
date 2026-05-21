@@ -36,7 +36,11 @@ typedef struct {
     float kick_timer;
     int team;
     int number;
-    float home_x, home_y;
+    float home_x, home_y;      /* base formation slot */
+    float target_x, target_y;  /* dynamic positional target */
+    int role;                  /* 0=GK, 1=DEF, 2=MID, 3=ATT */
+    float run_timer;           /* timing for making runs */
+    int is_making_run;         /* flag for active run */
 } Player;
 
 typedef struct {
@@ -136,7 +140,7 @@ static void ball_release_from(int owner_idx, float vx, float vy, float loft)
     player_trigger_kick(owner_idx);
 }
 
-static void formation_slot(int team, int idx, float* hx, float* hy)
+static void formation_slot(int team, int idx, float* hx, float* hy, int* role)
 {
     /* 4-4-2 style slots in normalized pitch space */
     static const float home[11][2] = {
@@ -145,10 +149,12 @@ static void formation_slot(int team, int idx, float* hx, float* hy)
         { -0.45f, -0.50f }, { -0.45f, -0.17f }, { -0.45f,  0.17f }, { -0.45f,  0.50f },
         { -0.18f, -0.22f }, { -0.18f,  0.22f }
     };
+    static const int roles[11] = { 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3 };
     int mirror = (team == 1);
     float sx = mirror ? -home[idx][0] : home[idx][0];
     *hx = sx;
     *hy = home[idx][1];
+    *role = roles[idx];
 }
 
 static void init_match(void)
@@ -164,9 +170,11 @@ static void init_match(void)
     {
         int team = i / PLAYERS_PER_TEAM;
         int slot = i % PLAYERS_PER_TEAM;
-        formation_slot(team, slot, &g_match.players[i].home_x, &g_match.players[i].home_y);
+        formation_slot(team, slot, &g_match.players[i].home_x, &g_match.players[i].home_y, &g_match.players[i].role);
         g_match.players[i].x = g_match.players[i].home_x;
         g_match.players[i].y = g_match.players[i].home_y;
+        g_match.players[i].target_x = g_match.players[i].home_x;
+        g_match.players[i].target_y = g_match.players[i].home_y;
         g_match.players[i].team = team;
         g_match.players[i].number = slot + 1;
         g_match.players[i].vx = 0.0f;
@@ -176,6 +184,8 @@ static void init_match(void)
         g_match.players[i].facing = (team == 0) ? 0.0f : (float)M_PI;
         g_match.players[i].run_phase = frand(0.0f, (float)(2.0 * M_PI));
         g_match.players[i].kick_timer = 0.0f;
+        g_match.players[i].run_timer = frand(0.5f, 2.0f);
+        g_match.players[i].is_making_run = 0;
     }
 
     g_match.ball.x = 0.0f;
@@ -231,11 +241,15 @@ static void kickoff(void)
     {
         g_match.players[i].x = g_match.players[i].home_x;
         g_match.players[i].y = g_match.players[i].home_y;
+        g_match.players[i].target_x = g_match.players[i].home_x;
+        g_match.players[i].target_y = g_match.players[i].home_y;
         g_match.players[i].disp_x = g_match.players[i].x;
         g_match.players[i].disp_y = g_match.players[i].y;
         g_match.players[i].vx = 0.0f;
         g_match.players[i].vy = 0.0f;
         g_match.players[i].kick_timer = 0.0f;
+        g_match.players[i].run_timer = frand(0.5f, 2.0f);
+        g_match.players[i].is_making_run = 0;
     }
 
     g_match.ball.disp_x = g_match.ball.x;
@@ -338,12 +352,91 @@ static void try_shoot(int owner_idx)
     }
 }
 
+static void calculate_positional_target(int i, float* tx, float* ty)
+{
+    Player* p = &g_match.players[i];
+    float bx = g_match.ball.x;
+    float by = g_match.ball.y;
+    int ball_team = -1;
+    float attack_dir = (p->team == 0) ? 1.0f : -1.0f;
+    float def_x_mult, lat_shift, forward_shift;
+    
+    /* Determine which team has possession */
+    if (g_match.ball.owner >= 0) {
+        ball_team = g_match.players[g_match.ball.owner].team;
+    }
+    
+    /* Base defensive shift based on ball position */
+    def_x_mult = 0.6f + 0.25f * fabsf(bx);
+    lat_shift = by * 0.15f;
+    
+    /* Adjust forward/backward based on possession and role */
+    if (ball_team == p->team) {
+        /* Attacking phase: push higher up the pitch */
+        switch (p->role) {
+            case 0: /* GK */
+                forward_shift = 0.0f;
+                break;
+            case 1: /* DEF */
+                forward_shift = 0.12f;
+                break;
+            case 2: /* MID */
+                forward_shift = 0.22f;
+                break;
+            case 3: /* ATT */
+                forward_shift = 0.30f;
+                break;
+            default:
+                forward_shift = 0.15f;
+        }
+    } else {
+        /* Defensive phase: drop deeper based on threat */
+        float threat = fabsf(bx) * 1.5f;
+        switch (p->role) {
+            case 0: /* GK */
+                forward_shift = -threat * 0.3f;
+                break;
+            case 1: /* DEF */
+                forward_shift = -threat * 0.4f;
+                break;
+            case 2: /* MID */
+                forward_shift = -0.08f - threat * 0.3f;
+                break;
+            case 3: /* ATT */
+                forward_shift = -0.15f - threat * 0.2f;
+                break;
+            default:
+                forward_shift = -0.1f;
+        }
+    }
+    
+    /* Calculate target position */
+    *tx = p->home_x * def_x_mult + (attack_dir * forward_shift) + lat_shift;
+    *ty = p->home_y * 0.75f + by * 0.12f;
+    
+    /* Apply lateral shift for wide players when ball is on their side */
+    if ((i % 4) == 3 || (i % 4) == 0) { /* Wide players */
+        float ball_side = (by > 0.0f) ? 1.0f : -1.0f;
+        float player_side = (p->home_y > 0.0f) ? 1.0f : -1.0f;
+        if (ball_side == player_side) {
+            *ty += ball_side * 0.08f; /* Push wider when ball is on their side */
+        }
+    }
+}
+
 static void update_player(int i, float dt)
 {
     Player* p = &g_match.players[i];
     float target_x, target_y;
     float dx, dy, len, max_speed = 0.38f;
     int has_ball = (g_match.ball.owner == i);
+    
+    /* Update run timer and making runs logic */
+    p->run_timer -= dt;
+    if (p->run_timer <= 0.0f && !has_ball) {
+        p->is_making_run = (rand01() < 0.35f && p->role >= 2);
+        p->run_timer = frand(1.5f, 4.0f);
+    }
 
     if (g_match.phase != 0)
     {
@@ -375,17 +468,35 @@ static void update_player(int i, float dt)
         int oteam = g_match.players[owner].team;
         if (p->team == oteam)
         {
-            /* support */
-            float ahead = (oteam == 0) ? 0.18f : -0.18f;
-            target_x = g_match.players[owner].x + ahead;
-            target_y = g_match.players[owner].y + ((i % 2) ? 0.12f : -0.12f);
+            /* Support: positional target adjusted for supporting angle */
+            calculate_positional_target(i, &target_x, &target_y);
+            /* Add offset to support ahead/behind ball carrier */
+            float support_offset = (oteam == 0) ? 0.15f : -0.15f;
+            target_x += support_offset;
+            
+            /* If making a run, push forward more aggressively */
+            if (p->is_making_run && p->role >= 2) {
+                target_x += (oteam == 0) ? 0.20f : -0.20f;
+            }
         }
         else
         {
-            /* press ball carrier */
-            target_x = g_match.players[owner].x;
-            target_y = g_match.players[owner].y;
-            max_speed = 0.44f;
+            /* Defending: press ball carrier or mark */
+            float press_dist = 0.18f;
+            calculate_positional_target(i, &target_x, &target_y);
+            
+            /* Nearest defender presses, others hold shape */
+            float d_to_owner = dist_sq(p->x, p->y, g_match.players[owner].x, g_match.players[owner].y);
+            if (d_to_owner < 0.08f || (p->role == 2 && d_to_owner < 0.15f)) {
+                /* Press the ball carrier */
+                target_x = g_match.players[owner].x;
+                target_y = g_match.players[owner].y;
+                max_speed = 0.48f;
+            } else {
+                /* Hold defensive shape but shift toward ball */
+                target_x = target_x * 0.7f + g_match.ball.x * 0.3f;
+                target_y = target_y * 0.8f + g_match.ball.y * 0.2f;
+            }
         }
     }
     else
@@ -398,10 +509,8 @@ static void update_player(int i, float dt)
         }
         else
         {
-            /* hold shape, drift toward ball side */
-            float bx = g_match.ball.x * 0.35f;
-            target_x = p->home_x * 0.55f + bx;
-            target_y = p->home_y * 0.7f + g_match.ball.y * 0.08f;
+            /* No possession: use calculated positional target */
+            calculate_positional_target(i, &target_x, &target_y);
         }
     }
 
@@ -423,6 +532,10 @@ static void update_player(int i, float dt)
     p->y += p->vy * dt;
     p->x = clampf(p->x, -PITCH_X_LIMIT, PITCH_X_LIMIT);
     p->y = clampf(p->y, -PITCH_Y_LIMIT, PITCH_Y_LIMIT);
+    
+    /* Store current target for debugging/visualization */
+    p->target_x = target_x;
+    p->target_y = target_y;
 }
 
 static void update_ball(float dt)
@@ -902,8 +1015,17 @@ static void draw_scene(void)
     draw_pitch();
 
     /* players (drawn before ball so ball renders on top) */
-    for (i = 0; i < TOTAL_PLAYERS; i++)
+    for (i = 0; i < TOTAL_PLAYERS; i++) {
         draw_player_sprite(&g_match.players[i], g_match.ball.owner == i);
+        
+        /* Draw positional target indicator (small dot showing where player wants to go) */
+        if (!g_paused && g_match.phase == 0) {
+            float tx = g_match.players[i].target_x;
+            float ty = g_match.players[i].target_y;
+            glColor4f(1.0f, 1.0f, 0.0f, 0.25f);
+            draw_circle(tx, ty, 0.012f, 6);
+        }
+    }
 
     draw_ball_sprite();
 
