@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_project_file>
+	<FileVersion major="1" minor="6" />
+	<Project>
+		<Option title="2d football" />
+		<Option pch_mode="2" />
+		<Option compiler="gcc" />
+		<Build>
+			<Target title="Debug">
+				<Option output="bin/Debug/2d football" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Debug/" />
+				<Option type="1" />
+				<Option compiler="gcc" />
+				<Compiler>
+					<Add option="-g" />
+					<Add option="-std=c++17" />
+					<Add option="-Wall" />
+					<Add directory="include" />
+				</Compiler>
+			</Target>
+			<Target title="Release">
+				<Option output="bin/Release/2d football" prefix_auto="1" extension_auto="1" />
+				<Option object_output="obj/Release/" />
+				<Option type="0" />
+				<Option compiler="gcc" />
+				<Compiler>
+					<Add option="-O2" />
+					<Add option="-std=c++17" />
+					<Add option="-Wall" />
+					<Add directory="include" />
+				</Compiler>
+				<Linker>
+					<Add option="-s" />
+				</Linker>
+			</Target>
+		</Build>
+		<Linker>
+			<Add library="opengl32" />
+			<Add library="glu32" />
+			<Add library="gdi32" />
+		</Linker>
+		<Unit filename="src/main.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/MatchSimulator.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/TeamAI.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/PlayerAI.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/MovementSystem.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/PassingSystem.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/Formation.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/TacticalZones.cpp"><Option compilerVar="CPP" /></Unit>
+		<Unit filename="src/Renderer.cpp"><Option compilerVar="CPP" /></Unit>
+		<Extensions />
+	</Project>
+</CodeBlocks_project_file>
